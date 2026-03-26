@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Anon's P2P Threads</title>
+	<style>
+		:root {
+			--bg: #0f1115;
+			--panel: #161920;
+			--accent: #3dd2c8;
+			--text: #e6e9ef;
+			--muted: #8a94a8;
+			--border: #242a35;
+			--danger: #ff6b6b;
+			--mono: "IBM Plex Mono", "Courier New", monospace;
+		}
+
+		* { box-sizing: border-box; }
+		body {
+			margin: 0;
+			padding: 0;
+			font-family: "Verdana", sans-serif;
+			background: var(--bg);
+			color: var(--text);
+		}
+
+		header {
+			padding: 12px 16px;
+			background: linear-gradient(90deg, #161920, #1c222d);
+			border-bottom: 1px solid var(--border);
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 12px;
+			position: sticky;
+			top: 0;
+			z-index: 2;
+		}
+
+		h1 {
+			margin: 0;
+			font-size: 20px;
+			color: var(--accent);
+			letter-spacing: 0.5px;
+		}
+
+		main {
+			max-width: 1200px;
+			margin: 0 auto;
+			padding: 12px 16px 32px;
+			display: grid;
+			grid-template-columns: 1.1fr 0.9fr;
+			gap: 16px;
+		}
+
+		@media (max-width: 900px) {
+			main { grid-template-columns: 1fr; }
+		}
+
+		.panel {
+			background: var(--panel);
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			padding: 12px 14px;
+			box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+		}
+
+		.panel h2 {
+			margin: 0 0 8px;
+			font-size: 16px;
+			color: var(--accent);
+		}
+
+		label { font-size: 13px; color: var(--muted); }
+		input, textarea, button {
+			width: 100%;
+			padding: 8px 9px;
+			margin-top: 4px;
+			border-radius: 5px;
+			border: 1px solid var(--border);
+			font-family: inherit;
+			background: #0f1219;
+			color: var(--text);
+		}
+
+		input:focus, textarea:focus { outline: 2px solid rgba(61, 210, 200, 0.35); }
+		button {
+			cursor: pointer;
+			background: var(--accent);
+			color: #0b1117;
+			border-color: #2aa59d;
+			font-weight: 600;
+		}
+		button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+		.row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+		.row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+		.mt { margin-top: 10px; }
+		.mb { margin-bottom: 10px; }
+
+		.status {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			font-size: 12px;
+			color: var(--muted);
+		}
+		.pill {
+			padding: 4px 8px;
+			border-radius: 999px;
+			border: 1px solid var(--border);
+			background: #0f1219;
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+		}
+		.pill strong { color: var(--accent); }
+
+		.feed { display: flex; flex-direction: column; gap: 8px; }
+		.post {
+			border: 1px solid var(--border);
+			background: #0f1219;
+			border-radius: 6px;
+			padding: 10px 12px;
+			box-shadow: 0 1px 6px rgba(0,0,0,0.35);
+		}
+		.post .meta {
+			display: flex;
+			justify-content: space-between;
+			font-size: 12px;
+			color: var(--muted);
+			margin-bottom: 6px;
+		}
+		.post .author { color: var(--accent); font-family: var(--mono); }
+		.post .body { white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 13px; }
+		.post.dm { border-color: #4a7dff; background: #11162b; }
+		.post.system { border-style: dashed; color: var(--muted); }
+
+		.badge { background: #1f2530; border: 1px solid #2e3544; padding: 4px 6px; border-radius: 4px; font-size: 12px; }
+		.danger { color: var(--danger); }
+		.muted { color: var(--muted); }
+		.mono { font-family: var(--mono); font-size: 12px; }
+
+		.scroller { max-height: 480px; overflow: auto; padding-right: 2px; }
+	</style>
+	<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
+</head>
+<body>
+	<header>
+		<h1>/p2p/ Web</h1>
+		<div class="status">
+			<span class="pill" id="status-role">role: unknown</span>
+			<span class="pill" id="status-topic">topic: none</span>
+			<span class="pill" id="status-peer">id: …</span>
+			<span class="pill" id="status-host">host: …</span>
+		</div>
+	</header>
+
+	<main>
+		<section class="panel">
+			<h2>Join / Topic</h2>
+			<div class="row">
+				<div>
+					<label for="topic">Topic (slug)</label>
+					<input id="topic" placeholder="b" />
+				</div>
+				<div>
+					<label for="secret">Shared secret (improves encryption)</label>
+					<input id="secret" placeholder="optional password" />
+				</div>
+			</div>
+			<div class="mt">
+				<button id="join">Join / Refresh</button>
+			</div>
+			<p class="badge mt">Everyone on the same topic + secret sees the same thread. First online peer becomes the host for that topic; if the host disappears, another peer will claim it.</p>
+		</section>
+
+		<section class="panel">
+			<h2>Direct Messages</h2>
+			<div class="row">
+				<div>
+					<label>Your peer id (share to DM you)</label>
+					<input id="my-id" readonly />
+				</div>
+				<div>
+					<label for="dm-target">Connect to peer id</label>
+					<input id="dm-target" placeholder="e.g. ab12 or chan-b-ab12" />
+				</div>
+			</div>
+			<div class="mt">
+				<button id="dm-connect">Start DM</button>
+			</div>
+		</section>
+
+		<section class="panel">
+			<h2>Post</h2>
+			<textarea id="message" rows="4" placeholder="What is on your mind?" class="mb"></textarea>
+			<div class="row">
+				<button id="send">Send to thread</button>
+				<button id="clear">Clear feed</button>
+			</div>
+		</section>
+
+		<section class="panel" style="grid-column: 1 / -1;">
+			<h2>Thread Feed</h2>
+			<div class="scroller" id="feed"></div>
+		</section>
+	</main>
+
+	<script>
+		// Basic 4chan-like anonymous thread built on PeerJS (WebRTC data channels).
+		// One peer per topic acts as the hub; others connect to it and the hub re-broadcasts messages.
+		// Encryption is symmetric AES-GCM with a key derived from topic + shared secret; keep the secret private.
+
+		const config = { host: "0.peerjs.com", port: 443, path: "/", secure: true, debug: 0 };
+		const state = {
+			topic: "b",
+			secret: "",
+			hostId: "",
+			peerId: "",
+			isHost: false,
+			peer: null,
+			key: null,
+			hostConn: null,
+			conns: new Map(), // peerId -> DataConnection
+			history: [],
+			syncInterval: null,
+			hostProbeInterval: null,
+			discoveringHost: false,
+		};
+
+		const els = {
+			topic: document.getElementById("topic"),
+			secret: document.getElementById("secret"),
+			join: document.getElementById("join"),
+			send: document.getElementById("send"),
+			clear: document.getElementById("clear"),
+			message: document.getElementById("message"),
+			feed: document.getElementById("feed"),
+			role: document.getElementById("status-role"),
+			statusTopic: document.getElementById("status-topic"),
+			statusPeer: document.getElementById("status-peer"),
+			statusHost: document.getElementById("status-host"),
+			myId: document.getElementById("my-id"),
+			dmTarget: document.getElementById("dm-target"),
+			dmConnect: document.getElementById("dm-connect"),
+		};
+
+		const HEX4_RE = /^[0-9a-f]{4}$/i;
+
+		function slugify(str) {
+			const base = (str || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+			return base || "b";
+		}
+
+		function randomHex4() {
+			const bytes = crypto.getRandomValues(new Uint8Array(2));
+			return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+		}
+
+		function fullPeerIdFromSuffix(suffix) {
+			return `chan-${state.topic}-${suffix}`;
+		}
+
+		function makeClientPeerId() {
+			let suffix = randomHex4();
+			while (suffix === "0000") suffix = randomHex4();
+			return fullPeerIdFromSuffix(suffix);
+		}
+
+		function peerSuffix(peerId) {
+			if (!peerId) return "";
+			const tail = String(peerId).split("-").pop() || "";
+			return HEX4_RE.test(tail) ? tail.toLowerCase() : peerId;
+		}
+
+		function normalizeTargetPeerId(input) {
+			const raw = String(input || "").trim().toLowerCase();
+			if (!raw) return "";
+			if (HEX4_RE.test(raw)) return fullPeerIdFromSuffix(raw);
+			return raw;
+		}
+
+		function updateStatus() {
+			els.role.textContent = `role: ${state.isHost ? "host" : "client"}`;
+			els.statusTopic.textContent = `topic: ${state.topic}`;
+			els.statusPeer.textContent = `id: ${peerSuffix(state.peerId) || "…"}`;
+			els.statusHost.textContent = `host: ${peerSuffix(state.hostId) || "…"}`;
+			els.myId.value = peerSuffix(state.peerId) || "";
+		}
+
+		function appendPost({ from, text, ts, dm = false, system = false }) {
+			const card = document.createElement("article");
+			card.className = "post" + (dm ? " dm" : "") + (system ? " system" : "");
+			const meta = document.createElement("div");
+			meta.className = "meta";
+			const author = document.createElement("span");
+			author.className = "author";
+			author.textContent = from;
+			const time = document.createElement("span");
+			time.textContent = new Date(ts).toLocaleTimeString();
+			meta.append(author, time);
+			const body = document.createElement("div");
+			body.className = "body";
+			body.textContent = text;
+			card.append(meta, body);
+			els.feed.append(card);
+			els.feed.scrollTop = els.feed.scrollHeight;
+		}
+
+		function renderHistory() {
+			els.feed.innerHTML = "";
+			state.history.forEach((p) => appendPost(p));
+		}
+
+		function isDuplicatePost(p) {
+			return state.history.some((q) => q.ts === p.ts && q.from === p.from && q.text === p.text);
+		}
+
+		function recordPost(p) {
+			if (!isDuplicatePost(p)) state.history.push(p);
+			appendPost(p);
+		}
+
+		function systemNote(text) { appendPost({ from: "system", text, ts: Date.now(), system: true }); }
+
+		async function deriveKey(topic, secret) {
+			const passphrase = `${topic}:${secret || ""}`;
+			const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(passphrase));
+			return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+		}
+
+		function toBase64(buf) {
+			const bytes = new Uint8Array(buf);
+			let str = "";
+			for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
+			return btoa(str);
+		}
+
+		function fromBase64(str) {
+			const bin = atob(str);
+			const out = new Uint8Array(bin.length);
+			for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+			return out;
+		}
+
+		async function encryptPayload(payload) {
+			if (!state.key) throw new Error("missing key");
+			const iv = crypto.getRandomValues(new Uint8Array(12));
+			const data = new TextEncoder().encode(JSON.stringify(payload));
+			const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, state.key, data);
+			return `${toBase64(iv)}:${toBase64(cipher)}`;
+		}
+
+		async function decryptPayload(wire) {
+			if (!state.key) throw new Error("missing key");
+			const [ivStr, dataStr] = String(wire || "").split(":");
+			if (!ivStr || !dataStr) throw new Error("bad packet");
+			const iv = fromBase64(ivStr);
+			const data = fromBase64(dataStr);
+			const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, state.key, data);
+			return JSON.parse(new TextDecoder().decode(new Uint8Array(plain)));
+		}
+
+		function connectAsClient() {
+			state.peer?.destroy();
+			const peerId = makeClientPeerId();
+			state.peerId = peerId;
+			state.peer = new Peer(peerId, config);
+			bindCommonPeerEvents();
+			state.peer.on("open", () => {
+				updateStatus();
+				startHostDiscovery();
+			});
+		}
+
+		function startHostDiscovery() {
+			if (state.hostProbeInterval) clearInterval(state.hostProbeInterval);
+			attemptHostConnection();
+			state.hostProbeInterval = setInterval(() => {
+				if (state.isHost) return;
+				if (state.hostConn && state.hostConn.open) return;
+				attemptHostConnection();
+			}, 6000);
+		}
+
+		function becomeHost() {
+			state.isHost = true;
+			state.discoveringHost = false;
+			if (state.hostProbeInterval) clearInterval(state.hostProbeInterval);
+			state.hostProbeInterval = null;
+			if (state.hostConn && state.hostConn.open) state.hostConn.close();
+			state.hostConn = null;
+			state.peer?.destroy();
+			state.peerId = state.hostId;
+			state.peer = new Peer(state.hostId, config);
+			bindCommonPeerEvents();
+			state.peer.on("open", () => {
+				updateStatus();
+				systemNote(`you are host for /${state.topic}/`);
+				// start periodic history sync only while hosting
+				if (state.syncInterval) clearInterval(state.syncInterval);
+				state.syncInterval = setInterval(broadcastHistory, 5000);
+			});
+			state.peer.on("connection", setupConn);
+		}
+
+		function bindCommonPeerEvents() {
+			state.peer.on("error", (err) => {
+				console.error(err);
+				if (err.type === "unavailable-id") {
+					if (state.isHost) {
+						state.isHost = false;
+						systemNote("host already exists; joining instead");
+						connectAsClient();
+						return;
+					}
+					systemNote("peer id collision; retrying with a new 4-hex id");
+					connectAsClient();
+					return;
+				}
+				systemNote(`peer error: ${err.type}`);
+			});
+			state.peer.on("close", () => {
+				systemNote("peer closed; retry join");
+			});
+			state.peer.on("disconnected", () => {
+				systemNote("peer disconnected; attempting reconnect");
+				state.peer.reconnect();
+			});
+		}
+
+		function attemptHostConnection() {
+			if (state.isHost) return;
+			if (state.discoveringHost) return;
+			if (state.hostConn && state.hostConn.open) return;
+			state.discoveringHost = true;
+			const conn = state.peer.connect(state.hostId, { metadata: { role: "client", topic: state.topic } });
+			let settled = false;
+
+			const finish = () => {
+				settled = true;
+				state.discoveringHost = false;
+				clearTimeout(timer);
+			};
+
+			const timer = setTimeout(() => {
+				if (settled) return;
+				finish();
+				systemNote("no host detected; claiming host role");
+				becomeHost();
+			}, 4000);
+
+			conn.on("open", () => {
+				if (settled) return;
+				finish();
+				state.isHost = false;
+				state.hostConn = conn;
+				setupConn(conn);
+				conn.on("close", () => {
+					state.hostConn = null;
+					if (!state.isHost) {
+						systemNote("host disconnected; promoting local thread cache to new host");
+						becomeHost();
+					}
+				});
+				systemNote(`connected to host ${state.hostId}`);
+			});
+
+			conn.on("error", (err) => {
+				if (settled) return;
+				finish();
+				if (String(err?.type || "") === "peer-unavailable") {
+					systemNote("failed to reach host; claiming host role");
+					becomeHost();
+					return;
+				}
+				systemNote("host probe failed; retrying");
+			});
+		}
+
+		function setupConn(conn) {
+			state.conns.set(conn.peer, conn);
+			conn.on("data", (d) => handlePacket(conn, d));
+			conn.on("close", () => state.conns.delete(conn.peer));
+			if (state.isHost && conn.metadata?.role === "client" && conn.metadata.topic === state.topic) {
+				if (conn.open) {
+					sendHistory(conn);
+				} else {
+					conn.on("open", () => sendHistory(conn));
+				}
+			}
+		}
+
+		async function handlePacket(conn, packet) {
+			try {
+				if (!packet || typeof packet !== "object") return;
+				if (packet.kind === "topic" && packet.topic === state.topic) {
+					await ingestTopicPacket(conn.peer, packet);
+				}
+				if (packet.kind === "dm") {
+					const payload = await decryptPayload(packet.cipher);
+					appendPost({ from: payload.from, text: payload.text, ts: payload.ts, dm: true });
+				}
+				if (packet.kind === "history" && packet.topic === state.topic) {
+					try {
+						const payload = await decryptPayload(packet.cipher);
+						const incoming = Array.isArray(payload.history) ? payload.history : [];
+						const merged = [...incoming];
+						for (const p of state.history) {
+							if (!merged.some(q => q.ts === p.ts && q.from === p.from && q.text === p.text)) {
+								merged.push(p);
+							}
+						}
+						merged.sort((a, b) => a.ts - b.ts);
+						state.history = merged;
+						renderHistory();
+					} catch (histErr) {
+						console.warn("history sync skipped (key mismatch)", histErr);
+					}
+				}
+			} catch (err) {
+				console.error(err);
+				systemNote(`decrypt failed: ${err.message}`);
+			}
+		}
+
+		async function ingestTopicPacket(sourceId, packet) {
+			const payload = await decryptPayload(packet.cipher);
+			recordPost({ from: payload.from, text: payload.text, ts: payload.ts, dm: false });
+			if (!state.isHost) return;
+			for (const [peerId, c] of state.conns.entries()) {
+				if (peerId === sourceId || peerId === state.peerId) continue;
+				if (c.open) c.send(packet);
+			}
+		}
+
+		async function sendToTopic(text) {
+			if (!state.key) return systemNote("join a topic first");
+			const payload = { from: state.peerId, text, ts: Date.now(), topic: state.topic };
+			const packet = { kind: "topic", topic: state.topic, cipher: await encryptPayload(payload) };
+			if (state.isHost) {
+				await ingestTopicPacket(state.peerId, packet);
+			} else if (state.hostConn && state.hostConn.open) {
+				state.hostConn.send(packet);
+				// record own post locally so client sees it immediately
+				recordPost({ from: payload.from, text: payload.text, ts: payload.ts, dm: false });
+			} else {
+				systemNote("no host connection");
+			}
+		}
+
+		async function sendHistory(conn) {
+			if (!state.history.length || !conn?.open) return;
+			const packet = { kind: "history", topic: state.topic, cipher: await encryptPayload({ history: state.history }) };
+			conn.send(packet);
+		}
+
+		async function broadcastHistory() {
+			try {
+				if (!state.isHost || !state.history.length) return;
+				const packet = { kind: "history", topic: state.topic, cipher: await encryptPayload({ history: state.history }) };
+				for (const [peerId, c] of state.conns.entries()) {
+					if (peerId === state.peerId) continue;
+					if (c.open && c.metadata?.topic === state.topic) c.send(packet);
+				}
+			} catch (e) {
+				console.warn("broadcastHistory error:", e);
+			}
+		}
+
+		async function sendDirect(targetId, text) {
+			if (!targetId) return systemNote("enter a peer id for DM");
+			const existing = state.conns.get(targetId);
+			let conn = existing;
+			if (!conn) {
+				conn = state.peer.connect(targetId, { metadata: { role: "dm" } });
+				setupConn(conn);
+			}
+			conn.on("open", async () => {
+				const packet = { kind: "dm", cipher: await encryptPayload({ from: state.peerId, text, ts: Date.now() }) };
+				conn.send(packet);
+				appendPost({ from: `${state.peerId} → ${targetId}`, text, ts: Date.now(), dm: true });
+			});
+		}
+
+		async function joinTopic() {
+			if (state.syncInterval) clearInterval(state.syncInterval);
+			state.syncInterval = null;
+			if (state.hostProbeInterval) clearInterval(state.hostProbeInterval);
+			state.hostProbeInterval = null;
+			state.discoveringHost = false;
+			state.topic = slugify(els.topic.value || "b");
+			state.secret = els.secret.value || "";
+			state.hostId = fullPeerIdFromSuffix("0000");
+			state.conns.forEach((c) => c.close());
+			state.conns.clear();
+			state.hostConn = null;
+			state.isHost = false;
+			state.history = [];
+			state.key = await deriveKey(state.topic, state.secret);
+			systemNote(`joining /${state.topic}/ …`);
+			connectAsClient();
+			updateStatus();
+		}
+
+		function clearFeed() {
+			els.feed.innerHTML = "";
+		}
+
+		// wire UI
+		els.join.onclick = joinTopic;
+		els.send.onclick = async () => {
+			const text = (els.message.value || "").trim();
+			if (!text) return;
+			els.message.value = "";
+			await sendToTopic(text);
+		};
+		els.clear.onclick = clearFeed;
+		els.dmConnect.onclick = () => {
+			const target = normalizeTargetPeerId(els.dmTarget.value || "");
+			const text = prompt("DM message");
+			if (!text) return;
+			sendDirect(target, text);
+		};
+
+		// Enter sends; Shift+Enter inserts a newline
+		els.message.addEventListener("keydown", (e) => {
+			if (e.key === "Enter" && !e.shiftKey) {
+				e.preventDefault();
+				els.send.click();
+			}
+		});
+
+		// load defaults from URL hash if present (#topic:secret)
+		(function bootstrap() {
+			const hash = (location.hash || "").replace(/^#/, "");
+			if (hash) {
+				const [topicPart, secretPart] = hash.split(":");
+				els.topic.value = topicPart || "b";
+				els.secret.value = secretPart || "";
+			}
+			joinTopic();
+		})();
+	</script>
+</body>
+</html>
