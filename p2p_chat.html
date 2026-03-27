@@ -3,7 +3,7 @@
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<title>Anon's P2P Threads</title>
+	<title>Anon P2P Threads</title>
 	<style>
 		:root {
 			--bg: #0f1115;
@@ -138,6 +138,26 @@
 		.post.system { border-style: dashed; color: var(--muted); }
 
 		.badge { background: #1f2530; border: 1px solid #2e3544; padding: 4px 6px; border-radius: 4px; font-size: 12px; }
+		.feed-tabs {
+			display: inline-flex;
+			gap: 8px;
+			margin-bottom: 10px;
+		}
+		.feed-tab {
+			width: auto;
+			padding: 6px 10px;
+			background: #121722;
+			color: var(--muted);
+			border: 1px solid var(--border);
+			border-radius: 999px;
+			font-size: 12px;
+			font-weight: 600;
+		}
+		.feed-tab.active {
+			background: var(--accent);
+			color: #0b1117;
+			border-color: #2aa59d;
+		}
 		.danger { color: var(--danger); }
 		.muted { color: var(--muted); }
 		.mono { font-family: var(--mono); font-size: 12px; }
@@ -160,11 +180,7 @@
 	<main>
 		<section class="panel">
 			<h2>Join / Topic</h2>
-			<div class="row">
-				<div>
-					<label for="topic">Topic (slug)</label>
-					<input id="topic" placeholder="b" />
-				</div>
+			<div>
 				<div>
 					<label for="secret">Shared secret (improves encryption)</label>
 					<input id="secret" placeholder="optional password" />
@@ -173,7 +189,7 @@
 			<div class="mt">
 				<button id="join">Join / Refresh</button>
 			</div>
-			<p class="badge mt">Everyone on the same topic + secret sees the same thread. First online peer becomes the host for that topic; if the host disappears, another peer will claim it.</p>
+			<p class="badge mt">Choose board from the URL query (example: <span class="mono">?b</span>). Everyone on the same board + secret sees the same thread. First online peer becomes the host for that board; if the host disappears, another peer will claim it.</p>
 		</section>
 
 		<section class="panel">
@@ -204,16 +220,21 @@
 
 		<section class="panel" style="grid-column: 1 / -1;">
 			<h2>Thread Feed</h2>
+			<div class="feed-tabs" role="tablist" aria-label="Thread filters">
+				<button id="tab-user" class="feed-tab active" type="button" role="tab" aria-selected="true">User</button>
+				<button id="tab-system" class="feed-tab" type="button" role="tab" aria-selected="false">System</button>
+			</div>
 			<div class="scroller" id="feed"></div>
 		</section>
 	</main>
 
 	<script>
-		// Basic 4chan-like anonymous thread built on PeerJS (WebRTC data channels).
-		// One peer per topic acts as the hub; others connect to it and the hub re-broadcasts messages.
-		// Encryption is symmetric AES-GCM with a key derived from topic + shared secret; keep the secret private.
+		// extremely volatile P2P thread forum built on PeerJS (WebRTC)
+		// Encryption is symmetric AES-GCM with a key derived from topic + optional shared secret
 
 		const config = { host: "0.peerjs.com", port: 443, path: "/", secure: true, debug: 0 };
+		const CLIENT_SUFFIX_KEY = "p2p_beta_client_suffix_v1";
+		const HOST_PROBE_FAILURES_BEFORE_CLAIM = 3;
 		const state = {
 			topic: "b",
 			secret: "",
@@ -222,16 +243,19 @@
 			isHost: false,
 			peer: null,
 			key: null,
+			clientSuffix: "",
 			hostConn: null,
 			conns: new Map(), // peerId -> DataConnection
 			history: [],
+			feedEntries: [],
+			feedTab: "user",
 			syncInterval: null,
 			hostProbeInterval: null,
+			hostProbeFailures: 0,
 			discoveringHost: false,
 		};
 
 		const els = {
-			topic: document.getElementById("topic"),
 			secret: document.getElementById("secret"),
 			join: document.getElementById("join"),
 			send: document.getElementById("send"),
@@ -245,6 +269,8 @@
 			myId: document.getElementById("my-id"),
 			dmTarget: document.getElementById("dm-target"),
 			dmConnect: document.getElementById("dm-connect"),
+			tabUser: document.getElementById("tab-user"),
+			tabSystem: document.getElementById("tab-system"),
 		};
 
 		const HEX4_RE = /^[0-9a-f]{4}$/i;
@@ -259,14 +285,48 @@
 			return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 		}
 
+		function readStoredClientSuffix() {
+			try {
+				const saved = localStorage.getItem(CLIENT_SUFFIX_KEY) || "";
+				if (HEX4_RE.test(saved) && saved !== "0000") return saved.toLowerCase();
+			} catch (_) {}
+			return "";
+		}
+
+		function writeStoredClientSuffix(suffix) {
+			if (!HEX4_RE.test(suffix) || suffix === "0000") return;
+			try {
+				localStorage.setItem(CLIENT_SUFFIX_KEY, suffix.toLowerCase());
+			} catch (_) {}
+		}
+
+		function ensureClientSuffix() {
+			if (HEX4_RE.test(state.clientSuffix) && state.clientSuffix !== "0000") return state.clientSuffix;
+			const saved = readStoredClientSuffix();
+			if (saved) {
+				state.clientSuffix = saved;
+				return state.clientSuffix;
+			}
+			let suffix = randomHex4();
+			while (suffix === "0000") suffix = randomHex4();
+			state.clientSuffix = suffix;
+			writeStoredClientSuffix(suffix);
+			return state.clientSuffix;
+		}
+
+		function rotateClientSuffix() {
+			let suffix = randomHex4();
+			while (suffix === "0000" || suffix === state.clientSuffix) suffix = randomHex4();
+			state.clientSuffix = suffix;
+			writeStoredClientSuffix(suffix);
+		}
+
 		function fullPeerIdFromSuffix(suffix) {
 			return `chan-${state.topic}-${suffix}`;
 		}
 
 		function makeClientPeerId() {
-			let suffix = randomHex4();
-			while (suffix === "0000") suffix = randomHex4();
-			return fullPeerIdFromSuffix(suffix);
+			return fullPeerIdFromSuffix(ensureClientSuffix());
 		}
 
 		function peerSuffix(peerId) {
@@ -282,6 +342,18 @@
 			return raw;
 		}
 
+		function topicFromUrl() {
+			const rawSearch = String(location.search || "").replace(/^\?/, "").trim();
+			if (!rawSearch) return "b";
+			if (rawSearch.includes("=")) {
+				const params = new URLSearchParams(location.search || "");
+				const named = params.get("board") || params.get("topic") || "";
+				return slugify(named || "b");
+			}
+			const firstToken = rawSearch.split("&")[0];
+			return slugify(decodeURIComponent(firstToken || "b"));
+		}
+
 		function updateStatus() {
 			els.role.textContent = `role: ${state.isHost ? "host" : "client"}`;
 			els.statusTopic.textContent = `topic: ${state.topic}`;
@@ -290,9 +362,10 @@
 			els.myId.value = peerSuffix(state.peerId) || "";
 		}
 
-		function appendPost({ from, text, ts, dm = false, system = false }) {
+		function createPostCard({ from, text, ts, dm = false, system = false }) {
 			const card = document.createElement("article");
 			card.className = "post" + (dm ? " dm" : "") + (system ? " system" : "");
+			card.dataset.kind = system ? "system" : "user";
 			const meta = document.createElement("div");
 			meta.className = "meta";
 			const author = document.createElement("span");
@@ -305,25 +378,54 @@
 			body.className = "body";
 			body.textContent = text;
 			card.append(meta, body);
-			els.feed.append(card);
+			return card;
+		}
+
+		function postVisibleInActiveTab(post) {
+			if (state.feedTab === "system") return !!post.system;
+			return !post.system;
+		}
+
+		function renderFeed() {
+			els.feed.innerHTML = "";
+			for (const post of state.feedEntries) {
+				if (!postVisibleInActiveTab(post)) continue;
+				els.feed.append(createPostCard(post));
+			}
 			els.feed.scrollTop = els.feed.scrollHeight;
 		}
 
-		function renderHistory() {
-			els.feed.innerHTML = "";
-			state.history.forEach((p) => appendPost(p));
+		function switchFeedTab(tab) {
+			state.feedTab = tab === "system" ? "system" : "user";
+			const userActive = state.feedTab === "user";
+			els.tabUser.classList.toggle("active", userActive);
+			els.tabSystem.classList.toggle("active", !userActive);
+			els.tabUser.setAttribute("aria-selected", String(userActive));
+			els.tabSystem.setAttribute("aria-selected", String(!userActive));
+			renderFeed();
 		}
 
-		function isDuplicatePost(p) {
-			return state.history.some((q) => q.ts === p.ts && q.from === p.from && q.text === p.text);
+		function upsertFeedEntry(post) {
+			if (!isDuplicatePost(post, state.feedEntries)) state.feedEntries.push(post);
+			renderFeed();
+		}
+
+		function renderHistory() {
+			const keep = state.feedEntries.filter((p) => p.system || p.dm);
+			state.feedEntries = [...keep, ...state.history.map((p) => ({ ...p, dm: false, system: false }))].sort((a, b) => a.ts - b.ts);
+			renderFeed();
+		}
+
+		function isDuplicatePost(p, list) {
+			return list.some((q) => q.ts === p.ts && q.from === p.from && q.text === p.text);
 		}
 
 		function recordPost(p) {
-			if (!isDuplicatePost(p)) state.history.push(p);
-			appendPost(p);
+			if (!isDuplicatePost(p, state.history)) state.history.push(p);
+			upsertFeedEntry(p);
 		}
 
-		function systemNote(text) { appendPost({ from: "system", text, ts: Date.now(), system: true }); }
+		function systemNote(text) { upsertFeedEntry({ from: "system", text, ts: Date.now(), system: true }); }
 
 		async function deriveKey(topic, secret) {
 			const passphrase = `${topic}:${secret || ""}`;
@@ -368,7 +470,7 @@
 			const peerId = makeClientPeerId();
 			state.peerId = peerId;
 			state.peer = new Peer(peerId, config);
-			bindCommonPeerEvents();
+			bindCommonPeerEvents(state.peer);
 			state.peer.on("open", () => {
 				updateStatus();
 				startHostDiscovery();
@@ -387,6 +489,7 @@
 
 		function becomeHost() {
 			state.isHost = true;
+			state.hostProbeFailures = 0;
 			state.discoveringHost = false;
 			if (state.hostProbeInterval) clearInterval(state.hostProbeInterval);
 			state.hostProbeInterval = null;
@@ -395,7 +498,7 @@
 			state.peer?.destroy();
 			state.peerId = state.hostId;
 			state.peer = new Peer(state.hostId, config);
-			bindCommonPeerEvents();
+			bindCommonPeerEvents(state.peer);
 			state.peer.on("open", () => {
 				updateStatus();
 				systemNote(`you are host for /${state.topic}/`);
@@ -406,28 +509,33 @@
 			state.peer.on("connection", setupConn);
 		}
 
-		function bindCommonPeerEvents() {
-			state.peer.on("error", (err) => {
+		function bindCommonPeerEvents(boundPeer) {
+			boundPeer.on("error", (err) => {
+				if (boundPeer !== state.peer) return;
 				console.error(err);
 				if (err.type === "unavailable-id") {
 					if (state.isHost) {
 						state.isHost = false;
-						systemNote("host already exists; joining instead");
+						state.hostProbeFailures = 0;
+						systemNote("host id busy; rejoining and probing for active host");
 						connectAsClient();
 						return;
 					}
+					rotateClientSuffix();
 					systemNote("peer id collision; retrying with a new 4-hex id");
 					connectAsClient();
 					return;
 				}
 				systemNote(`peer error: ${err.type}`);
 			});
-			state.peer.on("close", () => {
+			boundPeer.on("close", () => {
+				if (boundPeer !== state.peer) return;
 				systemNote("peer closed; retry join");
 			});
-			state.peer.on("disconnected", () => {
+			boundPeer.on("disconnected", () => {
+				if (boundPeer !== state.peer) return;
 				systemNote("peer disconnected; attempting reconnect");
-				state.peer.reconnect();
+				if (!boundPeer.destroyed) boundPeer.reconnect();
 			});
 		}
 
@@ -455,6 +563,7 @@
 			conn.on("open", () => {
 				if (settled) return;
 				finish();
+				state.hostProbeFailures = 0;
 				state.isHost = false;
 				state.hostConn = conn;
 				setupConn(conn);
@@ -476,7 +585,13 @@
 					becomeHost();
 					return;
 				}
-				systemNote("host probe failed; retrying");
+				state.hostProbeFailures += 1;
+				if (state.hostProbeFailures >= HOST_PROBE_FAILURES_BEFORE_CLAIM) {
+					systemNote(`host probe failed ${state.hostProbeFailures} times; claiming host role`);
+					becomeHost();
+					return;
+				}
+				systemNote(`host probe failed (${err?.type || "unknown"}); retrying (${state.hostProbeFailures}/${HOST_PROBE_FAILURES_BEFORE_CLAIM})`);
 			});
 		}
 
@@ -501,7 +616,7 @@
 				}
 				if (packet.kind === "dm") {
 					const payload = await decryptPayload(packet.cipher);
-					appendPost({ from: payload.from, text: payload.text, ts: payload.ts, dm: true });
+					upsertFeedEntry({ from: payload.from, text: payload.text, ts: payload.ts, dm: true });
 				}
 				if (packet.kind === "history" && packet.topic === state.topic) {
 					try {
@@ -581,7 +696,7 @@
 			conn.on("open", async () => {
 				const packet = { kind: "dm", cipher: await encryptPayload({ from: state.peerId, text, ts: Date.now() }) };
 				conn.send(packet);
-				appendPost({ from: `${state.peerId} → ${targetId}`, text, ts: Date.now(), dm: true });
+				upsertFeedEntry({ from: `${state.peerId} → ${targetId}`, text, ts: Date.now(), dm: true });
 			});
 		}
 
@@ -590,8 +705,9 @@
 			state.syncInterval = null;
 			if (state.hostProbeInterval) clearInterval(state.hostProbeInterval);
 			state.hostProbeInterval = null;
+			state.hostProbeFailures = 0;
 			state.discoveringHost = false;
-			state.topic = slugify(els.topic.value || "b");
+			state.topic = topicFromUrl();
 			state.secret = els.secret.value || "";
 			state.hostId = fullPeerIdFromSuffix("0000");
 			state.conns.forEach((c) => c.close());
@@ -599,6 +715,7 @@
 			state.hostConn = null;
 			state.isHost = false;
 			state.history = [];
+			state.feedEntries = [];
 			state.key = await deriveKey(state.topic, state.secret);
 			systemNote(`joining /${state.topic}/ …`);
 			connectAsClient();
@@ -606,7 +723,8 @@
 		}
 
 		function clearFeed() {
-			els.feed.innerHTML = "";
+			state.feedEntries = [];
+			renderFeed();
 		}
 
 		// wire UI
@@ -624,6 +742,8 @@
 			if (!text) return;
 			sendDirect(target, text);
 		};
+		els.tabUser.onclick = () => switchFeedTab("user");
+		els.tabSystem.onclick = () => switchFeedTab("system");
 
 		// Enter sends; Shift+Enter inserts a newline
 		els.message.addEventListener("keydown", (e) => {
@@ -636,11 +756,7 @@
 		// load defaults from URL hash if present (#topic:secret)
 		(function bootstrap() {
 			const hash = (location.hash || "").replace(/^#/, "");
-			if (hash) {
-				const [topicPart, secretPart] = hash.split(":");
-				els.topic.value = topicPart || "b";
-				els.secret.value = secretPart || "";
-			}
+			if (hash) els.secret.value = hash;
 			joinTopic();
 		})();
 	</script>
