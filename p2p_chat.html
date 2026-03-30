@@ -205,7 +205,8 @@
 				</div>
 			</div>
 			<div class="mt">
-				<button id="dm-connect">Start DM</button>
+				<label for="dm-message">Direct message</label>
+				<input id="dm-message" placeholder="type a private message and press Enter" />
 			</div>
 		</section>
 
@@ -268,7 +269,7 @@
 			statusHost: document.getElementById("status-host"),
 			myId: document.getElementById("my-id"),
 			dmTarget: document.getElementById("dm-target"),
-			dmConnect: document.getElementById("dm-connect"),
+			dmMessage: document.getElementById("dm-message"),
 			tabUser: document.getElementById("tab-user"),
 			tabSystem: document.getElementById("tab-system"),
 		};
@@ -471,6 +472,7 @@
 			state.peerId = peerId;
 			state.peer = new Peer(peerId, config);
 			bindCommonPeerEvents(state.peer);
+			state.peer.on("connection", setupConn);
 			state.peer.on("open", () => {
 				updateStatus();
 				startHostDiscovery();
@@ -686,18 +688,58 @@
 		}
 
 		async function sendDirect(targetId, text) {
-			if (!targetId) return systemNote("enter a peer id for DM");
-			const existing = state.conns.get(targetId);
-			let conn = existing;
+			if (!state.key || !state.peer || state.peer.destroyed) {
+				systemNote("join a topic first");
+				return false;
+			}
+			if (!targetId) {
+				systemNote("enter a peer id for DM");
+				return false;
+			}
+			if (targetId === state.peerId) {
+				systemNote("cannot DM yourself");
+				return false;
+			}
+			const body = String(text || "").trim();
+			if (!body) {
+				systemNote("enter a DM message");
+				return false;
+			}
+
+			const payload = { from: state.peerId, text: body, ts: Date.now() };
+			const packet = { kind: "dm", cipher: await encryptPayload(payload) };
+			let conn = state.conns.get(targetId);
 			if (!conn) {
-				conn = state.peer.connect(targetId, { metadata: { role: "dm" } });
+				conn = state.peer.connect(targetId, { metadata: { role: "dm", topic: state.topic } });
 				setupConn(conn);
 			}
-			conn.on("open", async () => {
-				const packet = { kind: "dm", cipher: await encryptPayload({ from: state.peerId, text, ts: Date.now() }) };
+
+			const sendPacket = () => {
+				if (!conn.open) return;
 				conn.send(packet);
-				upsertFeedEntry({ from: `${state.peerId} → ${targetId}`, text, ts: Date.now(), dm: true });
-			});
+				upsertFeedEntry({ from: `${state.peerId} → ${targetId}`, text: body, ts: payload.ts, dm: true });
+			};
+
+			if (conn.open) {
+				sendPacket();
+				return true;
+			}
+
+			if (typeof conn.once === "function") {
+				conn.once("open", sendPacket);
+				conn.once("error", (err) => systemNote(`dm failed: ${err?.type || "unknown"}`));
+			} else {
+				conn.on("open", sendPacket);
+				conn.on("error", (err) => systemNote(`dm failed: ${err?.type || "unknown"}`));
+			}
+			return true;
+		}
+
+		async function sendDirectFromComposer() {
+			const target = normalizeTargetPeerId(els.dmTarget.value || "");
+			const text = (els.dmMessage.value || "").trim();
+			const sent = await sendDirect(target, text);
+			if (sent) els.dmMessage.value = "";
 		}
 
 		async function joinTopic() {
@@ -736,12 +778,6 @@
 			await sendToTopic(text);
 		};
 		els.clear.onclick = clearFeed;
-		els.dmConnect.onclick = () => {
-			const target = normalizeTargetPeerId(els.dmTarget.value || "");
-			const text = prompt("DM message");
-			if (!text) return;
-			sendDirect(target, text);
-		};
 		els.tabUser.onclick = () => switchFeedTab("user");
 		els.tabSystem.onclick = () => switchFeedTab("system");
 
@@ -750,6 +786,13 @@
 			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
 				els.send.click();
+			}
+		});
+
+		els.dmMessage.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") {
+				e.preventDefault();
+				sendDirectFromComposer();
 			}
 		});
 
