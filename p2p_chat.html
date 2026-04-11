@@ -189,7 +189,7 @@
 			<div class="mt">
 				<button id="join">Join / Refresh</button>
 			</div>
-			<p class="badge mt">Choose board from the URL query (example: <span class="mono">?b</span>). Everyone on the same board + secret sees the same thread. First online peer becomes the host for that board; if the host disappears, another peer will claim it.</p>
+			<p class="badge mt">Choose board from the URL query (example: <span class="mono">?b</span>). Optionally pin your peer id with <span class="mono">id=1a2b</span> (example: <span class="mono">?b&amp;id=1a2b</span>) so it stays static. Everyone on the same board + secret sees the same thread. First online peer becomes the host for that board; if the host disappears, another peer will claim it.</p>
 		</section>
 
 		<section class="panel">
@@ -235,6 +235,8 @@
 
 		const config = { host: "0.peerjs.com", port: 443, path: "/", secure: true, debug: 0 };
 		const CLIENT_SUFFIX_KEY = "p2p_beta_client_suffix_v1";
+		const USER_ID_KEY = "p2p_beta_user_id_v1";
+		const THREAD_LOG_KEY_PREFIX = "p2p_beta_thread_log_v1";
 		const HOST_PROBE_FAILURES_BEFORE_CLAIM = 3;
 		const state = {
 			topic: "b",
@@ -245,6 +247,7 @@
 			peer: null,
 			key: null,
 			clientSuffix: "",
+			urlPeerSuffix: "",
 			hostConn: null,
 			conns: new Map(), // peerId -> DataConnection
 			history: [],
@@ -254,6 +257,7 @@
 			hostProbeInterval: null,
 			hostProbeFailures: 0,
 			discoveringHost: false,
+			threadLogKey: "",
 		};
 
 		const els = {
@@ -302,6 +306,10 @@
 		}
 
 		function ensureClientSuffix() {
+			if (HEX4_RE.test(state.urlPeerSuffix) && state.urlPeerSuffix !== "0000") {
+				state.clientSuffix = state.urlPeerSuffix.toLowerCase();
+				return state.clientSuffix;
+			}
 			if (HEX4_RE.test(state.clientSuffix) && state.clientSuffix !== "0000") return state.clientSuffix;
 			const saved = readStoredClientSuffix();
 			if (saved) {
@@ -316,10 +324,96 @@
 		}
 
 		function rotateClientSuffix() {
+			if (HEX4_RE.test(state.urlPeerSuffix) && state.urlPeerSuffix !== "0000") {
+				state.clientSuffix = state.urlPeerSuffix.toLowerCase();
+				return;
+			}
 			let suffix = randomHex4();
 			while (suffix === "0000" || suffix === state.clientSuffix) suffix = randomHex4();
 			state.clientSuffix = suffix;
 			writeStoredClientSuffix(suffix);
+		}
+
+		function persistUserId(peerId) {
+			const id = String(peerId || "").trim().toLowerCase();
+			if (!id) return;
+			try {
+				localStorage.setItem(USER_ID_KEY, id);
+			} catch (_) {}
+			const suffix = peerSuffix(id);
+			if (HEX4_RE.test(suffix) && suffix !== "0000") {
+				state.clientSuffix = suffix;
+				writeStoredClientSuffix(suffix);
+			}
+		}
+
+		function restoreUserIdFromStorage() {
+			let restored = "";
+			try {
+				restored = String(localStorage.getItem(USER_ID_KEY) || "").trim().toLowerCase();
+			} catch (_) {}
+			const fallbackSuffix = readStoredClientSuffix();
+			if (!restored && fallbackSuffix) restored = fullPeerIdFromSuffix(fallbackSuffix);
+			if (!restored) return;
+			const shown = peerSuffix(restored) || restored;
+			if (HEX4_RE.test(shown) && shown !== "0000") state.clientSuffix = shown;
+			els.myId.value = shown;
+			els.statusPeer.textContent = `id: ${shown}`;
+		}
+
+		async function threadLogKeyFor(topic, secret) {
+			const passphrase = `${topic}:${secret || ""}`;
+			const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(passphrase));
+			const digest = Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, "0")).join("");
+			return `${THREAD_LOG_KEY_PREFIX}:${digest.slice(0, 24)}`;
+		}
+
+		function sanitizeHistoryEntry(raw) {
+			if (!raw || typeof raw !== "object") return null;
+			const from = String(raw.from || "").trim();
+			const text = String(raw.text || "");
+			const ts = Number(raw.ts);
+			if (!from || !text || !Number.isFinite(ts)) return null;
+			return { from, text, ts, dm: false, system: false };
+		}
+
+		function saveThreadLogToStorage() {
+			if (!state.threadLogKey) return;
+			const deduped = [];
+			for (const p of state.history) {
+				const item = sanitizeHistoryEntry(p);
+				if (!item) continue;
+				if (!isDuplicatePost(item, deduped)) deduped.push(item);
+			}
+			const payload = { v: 1, savedAt: Date.now(), history: deduped.slice(-500) };
+			try {
+				localStorage.setItem(state.threadLogKey, JSON.stringify(payload));
+			} catch (e) {
+				console.warn("thread log save failed", e);
+			}
+		}
+
+		function restoreThreadLogFromStorage() {
+			if (!state.threadLogKey) return 0;
+			try {
+				const raw = localStorage.getItem(state.threadLogKey);
+				if (!raw) return 0;
+				const parsed = JSON.parse(raw);
+				const incoming = Array.isArray(parsed?.history) ? parsed.history : [];
+				const restored = [];
+				for (const entry of incoming) {
+					const p = sanitizeHistoryEntry(entry);
+					if (!p) continue;
+					if (!isDuplicatePost(p, restored)) restored.push(p);
+				}
+				restored.sort((a, b) => a.ts - b.ts);
+				state.history = restored;
+				renderHistory();
+				return restored.length;
+			} catch (e) {
+				console.warn("thread log restore failed", e);
+				return 0;
+			}
 		}
 
 		function fullPeerIdFromSuffix(suffix) {
@@ -353,6 +447,13 @@
 			}
 			const firstToken = rawSearch.split("&")[0];
 			return slugify(decodeURIComponent(firstToken || "b"));
+		}
+
+		function peerSuffixFromUrl() {
+			const params = new URLSearchParams(location.search || "");
+			const raw = String(params.get("id") || params.get("peer") || params.get("pid") || "").trim().toLowerCase();
+			if (HEX4_RE.test(raw) && raw !== "0000") return raw;
+			return "";
 		}
 
 		function updateStatus() {
@@ -423,6 +524,7 @@
 
 		function recordPost(p) {
 			if (!isDuplicatePost(p, state.history)) state.history.push(p);
+			saveThreadLogToStorage();
 			upsertFeedEntry(p);
 		}
 
@@ -474,6 +576,7 @@
 			bindCommonPeerEvents(state.peer);
 			state.peer.on("connection", setupConn);
 			state.peer.on("open", () => {
+				persistUserId(state.peerId);
 				updateStatus();
 				startHostDiscovery();
 			});
@@ -502,6 +605,7 @@
 			state.peer = new Peer(state.hostId, config);
 			bindCommonPeerEvents(state.peer);
 			state.peer.on("open", () => {
+				persistUserId(state.peerId);
 				updateStatus();
 				systemNote(`you are host for /${state.topic}/`);
 				// start periodic history sync only while hosting
@@ -521,6 +625,10 @@
 						state.hostProbeFailures = 0;
 						systemNote("host id busy; rejoining and probing for active host");
 						connectAsClient();
+						return;
+					}
+					if (HEX4_RE.test(state.urlPeerSuffix) && state.urlPeerSuffix !== "0000") {
+						systemNote("url peer id is unavailable; change ?id=xxxx and rejoin");
 						return;
 					}
 					rotateClientSuffix();
@@ -632,6 +740,7 @@
 						}
 						merged.sort((a, b) => a.ts - b.ts);
 						state.history = merged;
+						saveThreadLogToStorage();
 						renderHistory();
 					} catch (histErr) {
 						console.warn("history sync skipped (key mismatch)", histErr);
@@ -750,6 +859,11 @@
 			state.hostProbeFailures = 0;
 			state.discoveringHost = false;
 			state.topic = topicFromUrl();
+			state.urlPeerSuffix = peerSuffixFromUrl();
+			if (state.urlPeerSuffix) {
+				state.clientSuffix = state.urlPeerSuffix;
+				writeStoredClientSuffix(state.clientSuffix);
+			}
 			state.secret = els.secret.value || "";
 			state.hostId = fullPeerIdFromSuffix("0000");
 			state.conns.forEach((c) => c.close());
@@ -758,7 +872,10 @@
 			state.isHost = false;
 			state.history = [];
 			state.feedEntries = [];
+			state.threadLogKey = await threadLogKeyFor(state.topic, state.secret);
 			state.key = await deriveKey(state.topic, state.secret);
+			const restoredCount = restoreThreadLogFromStorage();
+			if (restoredCount) systemNote(`restored ${restoredCount} local posts`);
 			systemNote(`joining /${state.topic}/ …`);
 			connectAsClient();
 			updateStatus();
@@ -800,6 +917,7 @@
 		(function bootstrap() {
 			const hash = (location.hash || "").replace(/^#/, "");
 			if (hash) els.secret.value = hash;
+			restoreUserIdFromStorage();
 			joinTopic();
 		})();
 	</script>
