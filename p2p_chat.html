@@ -238,6 +238,7 @@
 		const USER_ID_KEY = "p2p_beta_user_id_v1";
 		const THREAD_LOG_KEY_PREFIX = "p2p_beta_thread_log_v1";
 		const HOST_PROBE_FAILURES_BEFORE_CLAIM = 3;
+		const MAX_DIFF_NOTES_PER_SIDE = 10;
 		const state = {
 			topic: "b",
 			secret: "",
@@ -249,7 +250,7 @@
 			clientSuffix: "",
 			urlPeerSuffix: "",
 			hostConn: null,
-			conns: new Map(), // peerId -> DataConnection
+			conns: new Map(),
 			history: [],
 			feedEntries: [],
 			feedTab: "user",
@@ -258,6 +259,9 @@
 			hostProbeFailures: 0,
 			discoveringHost: false,
 			threadLogKey: "",
+			localLogSavedAt: 0,
+			logReports: new Map(),
+			logConsensusToken: "",
 		};
 
 		const els = {
@@ -377,17 +381,106 @@
 			return { from, text, ts, dm: false, system: false };
 		}
 
+		function normalizeHistoryList(list) {
+			const out = [];
+			for (const raw of Array.isArray(list) ? list : []) {
+				const p = sanitizeHistoryEntry(raw);
+				if (!p) continue;
+				if (!isDuplicatePost(p, out)) out.push(p);
+			}
+			out.sort((a, b) => a.ts - b.ts);
+			return out;
+		}
+
+		function postKey(p) {
+			return `${p.ts}\u0000${p.from}\u0000${p.text}`;
+		}
+
+		function historySignature(history) {
+			const keys = normalizeHistoryList(history).map(postKey);
+			let h = 2166136261;
+			for (const line of keys) {
+				for (let i = 0; i < line.length; i++) {
+					h ^= line.charCodeAt(i);
+					h = Math.imul(h, 16777619);
+				}
+			}
+			return (h >>> 0).toString(16).padStart(8, "0");
+		}
+
+		function diffHistory(base, incoming) {
+			const a = normalizeHistoryList(base);
+			const b = normalizeHistoryList(incoming);
+			const aSet = new Set(a.map(postKey));
+			const bSet = new Set(b.map(postKey));
+			const removed = a.filter((p) => !bSet.has(postKey(p)));
+			const added = b.filter((p) => !aSet.has(postKey(p)));
+			return { removed, added };
+		}
+
+		function shortenText(text, max = 90) {
+			const s = String(text || "").replace(/\s+/g, " ").trim();
+			if (s.length <= max) return s;
+			return `${s.slice(0, max - 1)}...`;
+		}
+
+		function formatDiffLine(prefix, post) {
+			const who = peerSuffix(post.from) || post.from;
+			const when = new Date(post.ts).toLocaleTimeString();
+			return `${prefix} [${when}] ${who}: ${shortenText(post.text)}`;
+		}
+
+		function emitHistoryDiffNotes(removed, added) {
+			const rm = removed.slice(0, MAX_DIFF_NOTES_PER_SIDE);
+			const ad = added.slice(0, MAX_DIFF_NOTES_PER_SIDE);
+			for (const p of rm) systemNote(formatDiffLine("-", p));
+			for (const p of ad) systemNote(formatDiffLine("+", p));
+			if (removed.length > rm.length) systemNote(`- ... ${removed.length - rm.length} more`);
+			if (added.length > ad.length) systemNote(`+ ... ${added.length - ad.length} more`);
+		}
+
+		function upsertLogReport(peerId, report) {
+			const id = String(peerId || "").trim();
+			if (!id) return;
+			const history = normalizeHistoryList(report?.history);
+			const savedAt = Number(report?.savedAt);
+			state.logReports.set(id, {
+				peerId: id,
+				savedAt: Number.isFinite(savedAt) ? savedAt : 0,
+				history,
+				sig: historySignature(history),
+			});
+		}
+
+		function currentTopicClientPeerIds() {
+			const ids = [state.peerId];
+			for (const [peerId, c] of state.conns.entries()) {
+				if (c?.metadata?.role === "client" && c?.metadata?.topic === state.topic) ids.push(peerId);
+			}
+			return Array.from(new Set(ids.filter(Boolean)));
+		}
+
+		function applyAuthoritativeHistory(sourcePeerId, savedAt, incomingHistory, reasonText) {
+			const incoming = normalizeHistoryList(incomingHistory);
+			const before = normalizeHistoryList(state.history);
+			const { removed, added } = diffHistory(before, incoming);
+			if (removed.length || added.length) {
+				const who = peerSuffix(sourcePeerId) || sourcePeerId || "unknown";
+				systemNote(`${reasonText} from ${who} (savedAt=${savedAt || 0})`);
+				emitHistoryDiffNotes(removed, added);
+			}
+			state.history = incoming;
+			renderHistory();
+			saveThreadLogToStorage();
+		}
+
 		function saveThreadLogToStorage() {
 			if (!state.threadLogKey) return;
-			const deduped = [];
-			for (const p of state.history) {
-				const item = sanitizeHistoryEntry(p);
-				if (!item) continue;
-				if (!isDuplicatePost(item, deduped)) deduped.push(item);
-			}
+			const deduped = normalizeHistoryList(state.history);
 			const payload = { v: 1, savedAt: Date.now(), history: deduped.slice(-500) };
 			try {
 				localStorage.setItem(state.threadLogKey, JSON.stringify(payload));
+				state.localLogSavedAt = payload.savedAt;
 			} catch (e) {
 				console.warn("thread log save failed", e);
 			}
@@ -400,13 +493,9 @@
 				if (!raw) return 0;
 				const parsed = JSON.parse(raw);
 				const incoming = Array.isArray(parsed?.history) ? parsed.history : [];
-				const restored = [];
-				for (const entry of incoming) {
-					const p = sanitizeHistoryEntry(entry);
-					if (!p) continue;
-					if (!isDuplicatePost(p, restored)) restored.push(p);
-				}
-				restored.sort((a, b) => a.ts - b.ts);
+				const restored = normalizeHistoryList(incoming);
+				const savedAt = Number(parsed?.savedAt);
+				state.localLogSavedAt = Number.isFinite(savedAt) ? savedAt : 0;
 				state.history = restored;
 				renderHistory();
 				return restored.length;
@@ -596,6 +685,8 @@
 			state.isHost = true;
 			state.hostProbeFailures = 0;
 			state.discoveringHost = false;
+			state.logConsensusToken = "";
+			state.logReports.clear();
 			if (state.hostProbeInterval) clearInterval(state.hostProbeInterval);
 			state.hostProbeInterval = null;
 			if (state.hostConn && state.hostConn.open) state.hostConn.close();
@@ -608,7 +699,7 @@
 				persistUserId(state.peerId);
 				updateStatus();
 				systemNote(`you are host for /${state.topic}/`);
-				// start periodic history sync only while hosting
+				upsertLogReport(state.peerId, { savedAt: state.localLogSavedAt, history: state.history });
 				if (state.syncInterval) clearInterval(state.syncInterval);
 				state.syncInterval = setInterval(broadcastHistory, 5000);
 			});
@@ -684,6 +775,9 @@
 						becomeHost();
 					}
 				});
+				sendLogSnapshot(conn).catch((e) => {
+					console.warn("initial log snapshot send failed", e);
+				});
 				systemNote(`connected to host ${state.hostId}`);
 			});
 
@@ -708,14 +802,86 @@
 		function setupConn(conn) {
 			state.conns.set(conn.peer, conn);
 			conn.on("data", (d) => handlePacket(conn, d));
-			conn.on("close", () => state.conns.delete(conn.peer));
+			conn.on("close", () => {
+				state.conns.delete(conn.peer);
+				if (state.isHost) {
+					state.logReports.delete(conn.peer);
+					evaluateLatestLogConsensus();
+				}
+			});
 			if (state.isHost && conn.metadata?.role === "client" && conn.metadata.topic === state.topic) {
 				if (conn.open) {
 					sendHistory(conn);
+					requestLogSnapshot(conn);
 				} else {
-					conn.on("open", () => sendHistory(conn));
+					conn.on("open", () => {
+						sendHistory(conn);
+						requestLogSnapshot(conn);
+					});
 				}
 			}
+		}
+
+		function requestLogSnapshot(conn) {
+			if (!conn?.open) return;
+			conn.send({ kind: "log-sync-request", topic: state.topic });
+		}
+
+		async function sendLogSnapshot(conn) {
+			if (!conn?.open || !state.key) return;
+			const payload = {
+				from: state.peerId,
+				savedAt: state.localLogSavedAt || 0,
+				history: normalizeHistoryList(state.history),
+			};
+			const packet = { kind: "log-state", topic: state.topic, cipher: await encryptPayload(payload) };
+			conn.send(packet);
+		}
+
+		async function broadcastAuthoritativeHistory(sourcePeerId, savedAt, history) {
+			if (!state.isHost) return;
+			const packet = {
+				kind: "history-authoritative",
+				topic: state.topic,
+				cipher: await encryptPayload({ sourcePeerId, savedAt, history: normalizeHistoryList(history) }),
+			};
+			for (const [peerId, c] of state.conns.entries()) {
+				if (peerId === state.peerId) continue;
+				if (c.open && c.metadata?.topic === state.topic) c.send(packet);
+			}
+		}
+
+		function newestReport(a, b) {
+			if (!a) return b;
+			if (!b) return a;
+			if ((b.savedAt || 0) > (a.savedAt || 0)) return b;
+			if ((b.savedAt || 0) < (a.savedAt || 0)) return a;
+			if ((b.history?.length || 0) > (a.history?.length || 0)) return b;
+			if ((b.history?.length || 0) < (a.history?.length || 0)) return a;
+			return String(b.peerId) < String(a.peerId) ? b : a;
+		}
+
+		function evaluateLatestLogConsensus() {
+			if (!state.isHost) return;
+			upsertLogReport(state.peerId, { savedAt: state.localLogSavedAt, history: state.history });
+			const participants = currentTopicClientPeerIds();
+			const reports = participants.map((id) => state.logReports.get(id)).filter(Boolean);
+			if (!reports.length) return;
+			let winner = null;
+			for (const r of reports) winner = newestReport(winner, r);
+			if (!winner) return;
+			const mismatchCount = new Set(reports.map((r) => r.sig)).size;
+			const sortedIds = [...participants].sort().join(",");
+			const token = `${sortedIds}|${winner.peerId}|${winner.savedAt}|${winner.sig}|${mismatchCount}`;
+			if (token === state.logConsensusToken) return;
+			state.logConsensusToken = token;
+			if (mismatchCount > 1) {
+				systemNote(`localStorage mismatch across ${reports.length} users; selecting latest savedAt`);
+			}
+			applyAuthoritativeHistory(winner.peerId, winner.savedAt, winner.history, "merged latest localStorage");
+			broadcastAuthoritativeHistory(winner.peerId, winner.savedAt, winner.history).catch((e) => {
+				console.warn("broadcast authoritative history failed", e);
+			});
 		}
 
 		async function handlePacket(conn, packet) {
@@ -734,7 +900,7 @@
 						const incoming = Array.isArray(payload.history) ? payload.history : [];
 						const merged = [...incoming];
 						for (const p of state.history) {
-							if (!merged.some(q => q.ts === p.ts && q.from === p.from && q.text === p.text)) {
+							if (!merged.some((q) => q.ts === p.ts && q.from === p.from && q.text === p.text)) {
 								merged.push(p);
 							}
 						}
@@ -744,6 +910,28 @@
 						renderHistory();
 					} catch (histErr) {
 						console.warn("history sync skipped (key mismatch)", histErr);
+					}
+				}
+				if (packet.kind === "log-sync-request" && packet.topic === state.topic) {
+					await sendLogSnapshot(conn);
+				}
+				if (packet.kind === "log-state" && packet.topic === state.topic && state.isHost) {
+					const payload = await decryptPayload(packet.cipher);
+					const reportPeerId = String(payload.from || conn.peer || "").trim() || conn.peer;
+					upsertLogReport(reportPeerId, payload);
+					evaluateLatestLogConsensus();
+				}
+				if (packet.kind === "history-authoritative" && packet.topic === state.topic && !state.isHost) {
+					try {
+						const payload = await decryptPayload(packet.cipher);
+						applyAuthoritativeHistory(
+							payload.sourcePeerId,
+							Number(payload.savedAt) || 0,
+							payload.history,
+							"merged latest localStorage"
+						);
+					} catch (authErr) {
+						console.warn("authoritative history apply skipped", authErr);
 					}
 				}
 			} catch (err) {
@@ -770,7 +958,6 @@
 				await ingestTopicPacket(state.peerId, packet);
 			} else if (state.hostConn && state.hostConn.open) {
 				state.hostConn.send(packet);
-				// record own post locally so client sees it immediately
 				recordPost({ from: payload.from, text: payload.text, ts: payload.ts, dm: false });
 			} else {
 				systemNote("no host connection");
@@ -826,7 +1013,7 @@
 			const sendPacket = () => {
 				if (!conn.open) return;
 				conn.send(packet);
-				upsertFeedEntry({ from: `${state.peerId} → ${targetId}`, text: body, ts: payload.ts, dm: true });
+				upsertFeedEntry({ from: `${state.peerId} -> ${targetId}`, text: body, ts: payload.ts, dm: true });
 			};
 
 			if (conn.open) {
@@ -858,6 +1045,8 @@
 			state.hostProbeInterval = null;
 			state.hostProbeFailures = 0;
 			state.discoveringHost = false;
+			state.logConsensusToken = "";
+			state.logReports.clear();
 			state.topic = topicFromUrl();
 			state.urlPeerSuffix = peerSuffixFromUrl();
 			if (state.urlPeerSuffix) {
@@ -872,11 +1061,12 @@
 			state.isHost = false;
 			state.history = [];
 			state.feedEntries = [];
+			state.localLogSavedAt = 0;
 			state.threadLogKey = await threadLogKeyFor(state.topic, state.secret);
 			state.key = await deriveKey(state.topic, state.secret);
 			const restoredCount = restoreThreadLogFromStorage();
 			if (restoredCount) systemNote(`restored ${restoredCount} local posts`);
-			systemNote(`joining /${state.topic}/ …`);
+			systemNote(`joining /${state.topic}/ ...`);
 			connectAsClient();
 			updateStatus();
 		}
@@ -886,7 +1076,6 @@
 			renderFeed();
 		}
 
-		// wire UI
 		els.join.onclick = joinTopic;
 		els.send.onclick = async () => {
 			const text = (els.message.value || "").trim();
@@ -898,7 +1087,6 @@
 		els.tabUser.onclick = () => switchFeedTab("user");
 		els.tabSystem.onclick = () => switchFeedTab("system");
 
-		// Enter sends; Shift+Enter inserts a newline
 		els.message.addEventListener("keydown", (e) => {
 			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
@@ -913,7 +1101,6 @@
 			}
 		});
 
-		// load defaults from URL hash if present (#topic:secret)
 		(function bootstrap() {
 			const hash = (location.hash || "").replace(/^#/, "");
 			if (hash) els.secret.value = hash;
