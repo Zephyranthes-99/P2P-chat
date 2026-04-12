@@ -5,165 +5,611 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<title>Anon P2P Threads</title>
 	<style>
-		:root {
-			--bg: #0f1115;
-			--panel: #161920;
-			--accent: #3dd2c8;
-			--text: #e6e9ef;
-			--muted: #8a94a8;
-			--border: #242a35;
-			--danger: #ff6b6b;
-			--mono: "IBM Plex Mono", "Courier New", monospace;
-		}
+	:root {
+		--bg: #000;
+		--surface: #0f0f10;
+		--surface-2: #151516;
+		--line: #262629;
+		--text: #f5f5f5;
+		--muted: #a1a1aa;
+		--soft: #71717a;
+		--accent: #fff;
+		--dm: #10182c;
+		--dm-line: #2d4b85;
+		--danger: #ff6b6b;
+		--radius-xl: 28px;
+		--radius-lg: 22px;
+		--radius-md: 16px;
+		--radius-sm: 12px;
+		--mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+	}
 
-		* { box-sizing: border-box; }
-		body {
-			margin: 0;
-			padding: 0;
-			font-family: "Verdana", sans-serif;
-			background: var(--bg);
-			color: var(--text);
-		}
+	* { box-sizing: border-box; }
 
-		header {
-			padding: 12px 16px;
-			background: linear-gradient(90deg, #161920, #1c222d);
-			border-bottom: 1px solid var(--border);
-			display: flex;
-			align-items: center;
-			justify-content: space-between;
-			gap: 12px;
-			position: sticky;
-			top: 0;
-			z-index: 2;
-		}
+	html { color-scheme: dark; }
 
-		h1 {
-			margin: 0;
-			font-size: 20px;
-			color: var(--accent);
-			letter-spacing: 0.5px;
-		}
+	body {
+		margin: 0;
+		padding: 0;
+		font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		background:
+			radial-gradient(circle at top, rgba(255,255,255,0.05), transparent 28%),
+			linear-gradient(180deg, #050505 0%, #000 100%);
+		color: var(--text);
+	}
 
-		main {
-			max-width: 1200px;
-			margin: 0 auto;
-			padding: 12px 16px 32px;
-			display: grid;
-			grid-template-columns: 1.1fr 0.9fr;
-			gap: 16px;
-		}
+	header {
+		position: sticky;
+		top: 0;
+		z-index: 10;
+		padding: 14px 18px;
+		background: rgba(0,0,0,0.78);
+		backdrop-filter: blur(16px);
+		border-bottom: 1px solid rgba(255,255,255,0.07);
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 14px;
+		flex-wrap: wrap;
+	}
 
-		@media (max-width: 900px) {
-			main { grid-template-columns: 1fr; }
-		}
+	h1 {
+		margin: 0;
+		font-size: 1.05rem;
+		font-weight: 700;
+		letter-spacing: -0.03em;
+		color: #fff;
+	}
 
-		.panel {
-			background: var(--panel);
-			border: 1px solid var(--border);
-			border-radius: 6px;
-			padding: 12px 14px;
-			box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-		}
+	main {
+		max-width: 1180px;
+		margin: 0 auto;
+		padding: 20px 16px 36px;
+		display: grid;
+		grid-template-columns: 300px minmax(0, 1fr);
+		gap: 20px;
+		align-items: start;
+	}
 
-		.panel h2 {
-			margin: 0 0 8px;
-			font-size: 16px;
-			color: var(--accent);
-		}
+	@media (max-width: 900px) {
+		main { grid-template-columns: 1fr; }
+	}
 
-		label { font-size: 13px; color: var(--muted); }
-		input, textarea, button {
-			width: 100%;
-			padding: 8px 9px;
-			margin-top: 4px;
-			border-radius: 5px;
-			border: 1px solid var(--border);
-			font-family: inherit;
-			background: #0f1219;
-			color: var(--text);
-		}
+	.left-rail {
+		display: grid;
+		gap: 14px;
+		position: sticky;
+		top: 84px;
+	}
 
-		input:focus, textarea:focus { outline: 2px solid rgba(61, 210, 200, 0.35); }
-		button {
-			cursor: pointer;
-			background: var(--accent);
-			color: #0b1117;
-			border-color: #2aa59d;
-			font-weight: 600;
-		}
-		button:disabled { opacity: 0.6; cursor: not-allowed; }
+	@media (max-width: 900px) {
+		.left-rail { position: static; }
+	}
 
-		.row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-		.row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-		.mt { margin-top: 10px; }
-		.mb { margin-bottom: 10px; }
+	.center {
+		min-width: 0;
+	}
 
-		.status {
-			display: flex;
-			flex-wrap: wrap;
-			gap: 8px;
-			font-size: 12px;
-			color: var(--muted);
-		}
-		.pill {
-			padding: 4px 8px;
-			border-radius: 999px;
-			border: 1px solid var(--border);
-			background: #0f1219;
-			display: inline-flex;
-			align-items: center;
-			gap: 6px;
-		}
-		.pill strong { color: var(--accent); }
+	.panel {
+		background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.015));
+		border: 1px solid rgba(255,255,255,0.08);
+		border-radius: var(--radius-xl);
+		padding: 18px;
+		box-shadow: 0 8px 30px rgba(0,0,0,0.28);
+	}
 
-		.feed { display: flex; flex-direction: column; gap: 8px; }
+	.panel h2 {
+		margin: 0 0 12px;
+		font-size: 0.96rem;
+		font-weight: 700;
+		letter-spacing: -0.02em;
+		color: #fff;
+	}
+
+	label {
+		display: block;
+		margin-bottom: 6px;
+		font-size: 0.8rem;
+		color: var(--muted);
+	}
+
+	input, textarea {
+		width: 100%;
+		padding: 13px 14px;
+		border-radius: 16px;
+		border: 1px solid rgba(255,255,255,0.08);
+		background: rgba(255,255,255,0.04);
+		color: var(--text);
+		font-family: inherit;
+		outline: none;
+		transition: border-color 0.15s ease, background 0.15s ease;
+	}
+
+	input::placeholder, textarea::placeholder {
+		color: #70707a;
+	}
+
+	input:focus, textarea:focus {
+		border-color: rgba(255,255,255,0.18);
+		background: rgba(255,255,255,0.06);
+	}
+
+	textarea {
+		resize: vertical;
+		min-height: 112px;
+	}
+
+	button {
+		width: 100%;
+		padding: 12px 16px;
+		border-radius: 999px;
+		border: 0;
+		cursor: pointer;
+		font-family: inherit;
+		font-weight: 700;
+		transition: transform 0.15s ease, opacity 0.15s ease;
+	}
+
+	button:hover { transform: translateY(-1px); }
+	button:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+	.primary-btn {
+		background: #fff;
+		color: #000;
+	}
+
+	.secondary-btn {
+		background: rgba(255,255,255,0.06);
+		color: #fff;
+		border: 1px solid rgba(255,255,255,0.08);
+	}
+
+	.row {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 10px;
+	}
+
+	@media (max-width: 560px) {
+		.row { grid-template-columns: 1fr; }
+	}
+
+	.mt { margin-top: 10px; }
+	.mb { margin-bottom: 10px; }
+
+	.status {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+
+	.pill {
+		padding: 9px 12px;
+		border-radius: 999px;
+		border: 1px solid rgba(255,255,255,0.08);
+		background: rgba(255,255,255,0.04);
+		color: var(--muted);
+		font-size: 0.8rem;
+	}
+
+	.pill strong {
+		color: #fff;
+		font-weight: 600;
+	}
+
+	.badge {
+		background: rgba(255,255,255,0.04);
+		border: 1px solid rgba(255,255,255,0.07);
+		padding: 10px 12px;
+		border-radius: 16px;
+		font-size: 0.8rem;
+		color: var(--muted);
+		line-height: 1.5;
+	}
+
+	.muted { color: var(--muted); }
+	.mono { font-family: var(--mono); font-size: 12px; }
+	.danger { color: var(--danger); }
+
+	.composer {
+		background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.015));
+		border: 1px solid rgba(255,255,255,0.08);
+		border-radius: 32px;
+		padding: 18px;
+		margin-bottom: 16px;
+		box-shadow: 0 8px 30px rgba(0,0,0,0.28);
+	}
+
+	.composer-top {
+		display: grid;
+		grid-template-columns: 44px minmax(0, 1fr);
+		gap: 12px;
+		align-items: start;
+	}
+
+	.avatar {
+		width: 40px;
+		height: 40px;
+		border-radius: 50%;
+		display: grid;
+		place-items: center;
+		font-size: 0.82rem;
+		font-weight: 700;
+		background: linear-gradient(180deg, #2a2a2d, #161618);
+		border: 1px solid rgba(255,255,255,0.08);
+	}
+
+	.composer-box textarea {
+		border: 0;
+		background: transparent;
+		padding: 0;
+		min-height: 96px;
+		font-size: 1rem;
+		line-height: 1.45;
+	}
+
+	.composer-box textarea:focus {
+		border: 0;
+		background: transparent;
+	}
+
+	.composer-footer {
+		margin-top: 12px;
+		padding-top: 12px;
+		border-top: 1px solid rgba(255,255,255,0.07);
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+
+	.feed-panel {
+		padding: 0;
+		overflow: hidden;
+	}
+
+	.feed-header {
+		padding: 16px 18px;
+		border-bottom: 1px solid rgba(255,255,255,0.07);
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+
+	.feed-tabs {
+		display: inline-flex;
+		gap: 4px;
+		padding: 4px;
+		border-radius: 999px;
+		background: rgba(255,255,255,0.04);
+		border: 1px solid rgba(255,255,255,0.07);
+	}
+
+	.feed-tab {
+		width: auto;
+		padding: 9px 14px;
+		background: transparent;
+		color: var(--muted);
+		border-radius: 999px;
+		font-size: 12px;
+		font-weight: 700;
+	}
+
+	.feed-tab.active {
+		background: #fff;
+		color: #000;
+	}
+
+	.scroller {
+		max-height: 72vh;
+		overflow: auto;
+	}
+
+	.feed {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.post {
+		position: relative;
+		display: grid;
+		grid-template-columns: 44px minmax(0, 1fr);
+		gap: 12px;
+		padding: 18px;
+		border-bottom: 1px solid rgba(255,255,255,0.07);
+		background: transparent;
+	}
+
+	.post:last-child { border-bottom: 0; }
+
+	.post::before {
+		content: "";
+		position: absolute;
+		left: 38px;
+		top: 58px;
+		bottom: -6px;
+		width: 1px;
+		background: rgba(255,255,255,0.08);
+	}
+
+	.post:last-child::before {
+		display: none;
+	}
+
+	.post-avatar {
+		width: 40px;
+		height: 40px;
+		border-radius: 50%;
+		display: grid;
+		place-items: center;
+		background: linear-gradient(180deg, #2b2b2e, #161618);
+		border: 1px solid rgba(255,255,255,0.08);
+		font-size: 0.78rem;
+		font-weight: 700;
+		z-index: 1;
+	}
+
+	.post-main {
+		min-width: 0;
+	}
+
+	.post .meta {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 10px;
+		margin-bottom: 6px;
+	}
+
+	.post-author-wrap {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		min-width: 0;
+	}
+
+	.post .author {
+		color: #fff;
+		font-size: 0.92rem;
+		font-weight: 700;
+		letter-spacing: -0.02em;
+	}
+
+	.author-tag {
+		color: var(--muted);
+		font-family: var(--mono);
+		font-size: 0.72rem;
+		border: 1px solid rgba(255,255,255,0.08);
+		padding: 3px 7px;
+		border-radius: 999px;
+	}
+
+	.post .time {
+		font-size: 0.8rem;
+		color: var(--muted);
+		white-space: nowrap;
+	}
+
+	.post .body {
+		white-space: pre-wrap;
+		word-break: break-word;
+		font-size: 0.95rem;
+		line-height: 1.5;
+		color: #f1f1f1;
+	}
+
+	.post-actions {
+		margin-top: 12px;
+		display: flex;
+		gap: 16px;
+		color: var(--muted);
+		font-size: 0.82rem;
+	}
+
+	.post.dm {
+		background: var(--dm);
+		border-left: 1px solid var(--dm-line);
+	}
+
+	.post.system {
+		grid-template-columns: 30px minmax(0, 1fr);
+		background: rgba(255,255,255,0.02);
+	}
+
+	.post.system::before { display: none; }
+
+	.post.system .post-avatar {
+		width: 28px;
+		height: 28px;
+		font-size: 0.68rem;
+		background: rgba(255,255,255,0.05);
+	}
+
+	.post.system .author { color: var(--muted); }
+	.post.system .body { color: #c9c9cf; font-size: 0.88rem; }
+
+	@media (max-width: 560px) {
 		.post {
-			border: 1px solid var(--border);
-			background: #0f1219;
-			border-radius: 6px;
-			padding: 10px 12px;
-			box-shadow: 0 1px 6px rgba(0,0,0,0.35);
+			grid-template-columns: 38px minmax(0, 1fr);
+			padding: 14px;
 		}
-		.post .meta {
-			display: flex;
-			justify-content: space-between;
-			font-size: 12px;
-			color: var(--muted);
-			margin-bottom: 6px;
-		}
-		.post .author { color: var(--accent); font-family: var(--mono); }
-		.post .body { white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 13px; }
-		.post.dm { border-color: #4a7dff; background: #11162b; }
-		.post.system { border-style: dashed; color: var(--muted); }
 
-		.badge { background: #1f2530; border: 1px solid #2e3544; padding: 4px 6px; border-radius: 4px; font-size: 12px; }
-		.feed-tabs {
-			display: inline-flex;
-			gap: 8px;
-			margin-bottom: 10px;
-		}
-		.feed-tab {
-			width: auto;
-			padding: 6px 10px;
-			background: #121722;
-			color: var(--muted);
-			border: 1px solid var(--border);
-			border-radius: 999px;
-			font-size: 12px;
-			font-weight: 600;
-		}
-		.feed-tab.active {
-			background: var(--accent);
-			color: #0b1117;
-			border-color: #2aa59d;
-		}
-		.danger { color: var(--danger); }
-		.muted { color: var(--muted); }
-		.mono { font-family: var(--mono); font-size: 12px; }
+		.post::before { left: 32px; }
+	}
 
-		.scroller { max-height: 480px; overflow: auto; padding-right: 2px; }
-	</style>
+	button,
+	.post,
+	.post-actions span,
+	.post-avatar,
+	.feed-tab,
+	input,
+	textarea {
+		transition:
+			background 0.18s ease,
+			border-color 0.18s ease,
+			color 0.18s ease,
+			transform 0.18s ease,
+			opacity 0.18s ease,
+			box-shadow 0.18s ease;
+	}
+
+	.post {
+		cursor: default;
+	}
+
+	.post:hover {
+		background: rgba(255,255,255,0.025);
+	}
+
+	.post:hover .post-avatar {
+		transform: scale(1.03);
+	}
+
+	.post-main:hover .body {
+		color: #ffffff;
+	}
+
+	.post-actions {
+		margin-top: 14px;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		color: var(--muted);
+		font-size: 0.82rem;
+	}
+
+	.post-actions span {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 32px;
+		height: 32px;
+		border-radius: 999px;
+		background: transparent;
+		border: 1px solid transparent;
+		user-select: none;
+	}
+
+	.post-actions span:hover {
+		background: rgba(255,255,255,0.06);
+		border-color: rgba(255,255,255,0.08);
+		color: #fff;
+		transform: translateY(-1px);
+	}
+
+	.post.dm {
+		background:
+			linear-gradient(180deg, rgba(61, 98, 180, 0.16), rgba(61, 98, 180, 0.08));
+		border-left: 1px solid rgba(90, 140, 255, 0.5);
+	}
+
+	.post.dm:hover {
+		background:
+			linear-gradient(180deg, rgba(61, 98, 180, 0.22), rgba(61, 98, 180, 0.1));
+	}
+
+	.post.dm .author {
+		color: #dbe7ff;
+	}
+
+	.post.system {
+		opacity: 0.92;
+	}
+
+	.post.system:hover {
+		background: rgba(255,255,255,0.035);
+	}
+
+	.author-tag {
+		max-width: 220px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.feed-header {
+		position: sticky;
+		top: 0;
+		z-index: 3;
+		background: rgba(10,10,10,0.88);
+		backdrop-filter: blur(14px);
+	}
+
+	.scroller::-webkit-scrollbar {
+		width: 10px;
+	}
+
+	.scroller::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	.scroller::-webkit-scrollbar-thumb {
+		background: rgba(255,255,255,0.12);
+		border-radius: 999px;
+		border: 2px solid transparent;
+		background-clip: padding-box;
+	}
+
+	.primary-btn:hover {
+		box-shadow: 0 6px 20px rgba(255,255,255,0.12);
+	}
+
+	.secondary-btn:hover {
+		background: rgba(255,255,255,0.09);
+	}
+
+	input:hover,
+	textarea:hover {
+		border-color: rgba(255,255,255,0.12);
+	}
+
+	@media (max-width: 900px) {
+		main {
+			padding-bottom: 110px;
+		}
+
+		.composer {
+			position: fixed;
+			left: 10px;
+			right: 10px;
+			bottom: 10px;
+			z-index: 20;
+			margin-bottom: 0;
+			border-radius: 24px;
+			background: rgba(10,10,10,0.94);
+			backdrop-filter: blur(18px);
+			box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+		}
+
+		.composer-top {
+			grid-template-columns: 36px minmax(0, 1fr);
+			gap: 10px;
+		}
+
+		.composer-box textarea {
+			min-height: 44px;
+			max-height: 120px;
+			font-size: 0.96rem;
+		}
+
+		.composer-footer {
+			padding-top: 10px;
+			margin-top: 10px;
+		}
+
+		.composer-footer .muted {
+			display: none;
+		}
+
+		.post {
+			padding-bottom: 16px;
+		}
+	}
+
+</style>
 	<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
@@ -177,26 +623,28 @@
 		</div>
 	</header>
 
-	<main>
+<main>
+	<div class="left-rail">
 		<section class="panel">
 			<h2>Join / Topic</h2>
 			<div>
-				<div>
-					<label for="secret">Shared secret (improves encryption)</label>
-					<input id="secret" placeholder="optional password" />
-				</div>
+				<label for="secret">Shared secret</label>
+				<input id="secret" placeholder="optional password" />
 			</div>
 			<div class="mt">
-				<button id="join">Join / Refresh</button>
+				<button id="join" class="primary-btn">Join / Refresh</button>
 			</div>
-			<p class="badge mt">Choose board from the URL query (example: <span class="mono">?b</span>). Optionally pin your peer id with <span class="mono">id=1a2b</span> (example: <span class="mono">?b&amp;id=1a2b</span>) so it stays static. Everyone on the same board + secret sees the same thread. First online peer becomes the host for that board; if the host disappears, another peer will claim it.</p>
+			<p class="badge mt">
+				Choose board from the URL query, like <span class="mono">?b</span>.
+				Optionally pin your peer id with <span class="mono">id=1a2b</span>.
+			</p>
 		</section>
 
 		<section class="panel">
 			<h2>Direct Messages</h2>
 			<div class="row">
 				<div>
-					<label>Your peer id (share to DM you)</label>
+					<label>Your peer id</label>
 					<input id="my-id" readonly />
 				</div>
 				<div>
@@ -209,25 +657,39 @@
 				<input id="dm-message" placeholder="type a private message and press Enter" />
 			</div>
 		</section>
+	</div>
 
-		<section class="panel">
-			<h2>Post</h2>
-			<textarea id="message" rows="4" placeholder="What is on your mind?" class="mb"></textarea>
-			<div class="row">
-				<button id="send">Send to thread</button>
-				<button id="clear">Clear feed</button>
+	<div class="center">
+		<section class="composer">
+			<div class="composer-top">
+				<div class="avatar" id="composer-avatar">me</div>
+				<div class="composer-box">
+					<textarea id="message" placeholder="What’s happening in this board?"></textarea>
+					<div class="composer-footer">
+						<div class="muted" style="font-size: 12px;">encrypted • p2p • anonymous</div>
+						<div style="display:flex; gap:10px; flex-wrap:wrap;">
+							<button id="clear" class="secondary-btn" type="button">Clear feed</button>
+							<button id="send" class="primary-btn" type="button">Post</button>
+						</div>
+					</div>
+				</div>
 			</div>
 		</section>
 
-		<section class="panel" style="grid-column: 1 / -1;">
-			<h2>Thread Feed</h2>
-			<div class="feed-tabs" role="tablist" aria-label="Thread filters">
-				<button id="tab-user" class="feed-tab active" type="button" role="tab" aria-selected="true">User</button>
-				<button id="tab-system" class="feed-tab" type="button" role="tab" aria-selected="false">System</button>
+		<section class="panel feed-panel">
+			<div class="feed-header">
+				<h2 style="margin:0;">Thread Feed</h2>
+				<div class="feed-tabs" role="tablist" aria-label="Thread filters">
+					<button id="tab-user" class="feed-tab active" type="button" role="tab" aria-selected="true">User</button>
+					<button id="tab-system" class="feed-tab" type="button" role="tab" aria-selected="false">System</button>
+				</div>
 			</div>
-			<div class="scroller" id="feed"></div>
+			<div class="scroller">
+				<div class="feed" id="feed"></div>
+			</div>
 		</section>
-	</main>
+	</div>
+</main>	
 
 	<script>
 		// extremely volatile P2P thread forum built on PeerJS (WebRTC)
@@ -545,30 +1007,85 @@
 			return "";
 		}
 
+		function setStatusPill(el, label, value) {
+			el.innerHTML = `${label}: <strong>${value}</strong>`;
+		}
+
 		function updateStatus() {
-			els.role.textContent = `role: ${state.isHost ? "host" : "client"}`;
-			els.statusTopic.textContent = `topic: ${state.topic}`;
-			els.statusPeer.textContent = `id: ${peerSuffix(state.peerId) || "…"}`;
-			els.statusHost.textContent = `host: ${peerSuffix(state.hostId) || "…"}`;
-			els.myId.value = peerSuffix(state.peerId) || "";
+			const peerShort = peerSuffix(state.peerId) || "…";
+			const hostShort = peerSuffix(state.hostId) || "…";
+
+			setStatusPill(els.role, "role", state.isHost ? "host" : "client");
+			setStatusPill(els.statusTopic, "topic", state.topic);
+			setStatusPill(els.statusPeer, "id", peerShort);
+			setStatusPill(els.statusHost, "host", hostShort);
+
+			els.myId.value = peerShort;
+
+			const avatar = document.getElementById("composer-avatar");
+			if (avatar) avatar.textContent = peerShort.slice(0, 4) || "me";
 		}
 
 		function createPostCard({ from, text, ts, dm = false, system = false }) {
 			const card = document.createElement("article");
 			card.className = "post" + (dm ? " dm" : "") + (system ? " system" : "");
 			card.dataset.kind = system ? "system" : "user";
+
+			const avatar = document.createElement("div");
+			avatar.className = "post-avatar";
+			avatar.textContent = system ? "i" : (peerSuffix(from) || String(from).slice(0, 2)).slice(0, 4);
+
+			const main = document.createElement("div");
+			main.className = "post-main";
+
 			const meta = document.createElement("div");
 			meta.className = "meta";
+
+			const authorWrap = document.createElement("div");
+			authorWrap.className = "post-author-wrap";
+
 			const author = document.createElement("span");
 			author.className = "author";
-			author.textContent = from;
+			author.textContent = system
+				? "system"
+				: dm
+					? `private • ${peerSuffix(from) || "dm"}`
+					: `anon ${peerSuffix(from) || "user"}`;
+
+			authorWrap.appendChild(author);
+
+			if (!system) {
+				const tag = document.createElement("span");
+				tag.className = "author-tag";
+				tag.textContent = from;
+				authorWrap.appendChild(tag);
+			}
+
 			const time = document.createElement("span");
-			time.textContent = new Date(ts).toLocaleTimeString();
-			meta.append(author, time);
+			time.className = "time";
+			time.textContent = new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
+
+			meta.append(authorWrap, time);
+
 			const body = document.createElement("div");
 			body.className = "body";
 			body.textContent = text;
-			card.append(meta, body);
+
+			main.append(meta, body);
+
+			if (!system) {
+				const actions = document.createElement("div");
+				actions.className = "post-actions";
+				actions.innerHTML = `
+					<span title="Like">♡</span>
+					<span title="Reply">💬</span>
+					<span title="Repost">↻</span>
+					<span title="Share">✈</span>
+				`;
+				main.appendChild(actions);
+			}
+
+			card.append(avatar, main);
 			return card;
 		}
 
