@@ -608,6 +608,83 @@
 			padding-bottom: 16px;
 		}
 	}
+	/*scaling fixes*/
+	html, body {
+		min-height: 100%;
+		overflow-x: hidden;
+	}
+
+	main {
+		width: 100%;
+	}
+
+	.composer-footer button {
+		width: auto;
+		min-width: 96px;
+	}
+
+	.composer-footer > div:last-child {
+		flex: 0 1 auto;
+	}
+
+	.post .meta,
+	.post-author-wrap {
+		min-width: 0;
+	}
+
+	.post .time {
+		flex-shrink: 0;
+	}
+
+	.post-actions button {
+		width: auto;
+		padding: 7px 10px;
+		font-size: 0.82rem;
+		background: transparent;
+		color: var(--muted);
+		border: 1px solid transparent;
+	}
+
+	.post-actions button:hover {
+		background: rgba(255,255,255,0.06);
+		border-color: rgba(255,255,255,0.08);
+		color: #fff;
+	}
+
+	.comments {
+		margin-top: 10px;
+		display: grid;
+		gap: 8px;
+	}
+
+	.comment {
+		padding: 9px 11px;
+		border-radius: 14px;
+		background: rgba(255,255,255,0.045);
+		border: 1px solid rgba(255,255,255,0.07);
+		font-size: 0.84rem;
+		color: #ddd;
+	}
+
+	.comment strong {
+		color: #fff;
+	}
+
+	.comment-form {
+		margin-top: 10px;
+		display: flex;
+		gap: 8px;
+	}
+
+	.comment-form input {
+		flex: 1;
+		padding: 10px 12px;
+	}
+
+	.comment-form button {
+		width: auto;
+		padding: 10px 14px;
+	}
 
 </style>
 	<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
@@ -724,6 +801,8 @@
 			localLogSavedAt: 0,
 			logReports: new Map(),
 			logConsensusToken: "",
+			likes: new Map(),
+			comments: new Map(),
 		};
 
 		const els = {
@@ -856,6 +935,64 @@
 
 		function postKey(p) {
 			return `${p.ts}\u0000${p.from}\u0000${p.text}`;
+		}
+
+		function postId(p) {
+			return postKey(p);
+		}
+
+		function getLikeSet(id) {
+			if (!state.likes.has(id)) state.likes.set(id, new Set());
+			return state.likes.get(id);
+		}
+
+		function getComments(id) {
+			if (!state.comments.has(id)) state.comments.set(id, []);
+			return state.comments.get(id);
+		}
+
+		function applyReaction(payload) {
+			const id = String(payload.postId || "");
+			const from = String(payload.from || "");
+			if (!id || !from) return;
+
+			const likes = getLikeSet(id);
+			if (payload.action === "unlike") likes.delete(from);
+			else likes.add(from);
+
+			renderFeed();
+		}
+
+		function applyComment(payload) {
+			const id = String(payload.postId || "");
+			const from = String(payload.from || "");
+			const text = String(payload.text || "").trim();
+			const ts = Number(payload.ts);
+
+			if (!id || !from || !text || !Number.isFinite(ts)) return;
+
+			const comments = getComments(id);
+			const exists = comments.some((c) => c.from === from && c.text === text && c.ts === ts);
+			if (!exists) comments.push({ from, text, ts });
+
+			renderFeed();
+		}
+
+		async function broadcastMeta(kind, payload) {
+			const packet = {
+				kind,
+				topic: state.topic,
+				cipher: await encryptPayload(payload),
+			};
+
+			if (state.isHost) {
+				for (const [peerId, c] of state.conns.entries()) {
+					if (peerId === state.peerId) continue;
+					if (c.open && c.metadata?.topic === state.topic) c.send(packet);
+				}
+			} else if (state.hostConn && state.hostConn.open) {
+				state.hostConn.send(packet);
+			}
 		}
 
 		function historySignature(history) {
@@ -1076,17 +1213,90 @@
 			if (!system) {
 				const actions = document.createElement("div");
 				actions.className = "post-actions";
-				actions.innerHTML = `
-					<span title="Like">♡</span>
-					<span title="Reply">💬</span>
-					<span title="Repost">↻</span>
-					<span title="Share">✈</span>
-				`;
+				const id = postId({ from, text, ts });
+				const likes = getLikeSet(id);
+				const comments = getComments(id);
+				const liked = likes.has(state.peerId);
+
+				const likeBtn = document.createElement("button");
+				likeBtn.type = "button";
+				likeBtn.textContent = `${liked ? "♥" : "♡"} ${likes.size}`;
+				likeBtn.title = "Like";
+				likeBtn.onclick = async () => {
+					const action = liked ? "unlike" : "like";
+					const payload = { postId: id, from: state.peerId, action, ts: Date.now() };
+					applyReaction(payload);
+					await broadcastMeta("reaction", payload);
+				};
+
+				const commentBtn = document.createElement("button");
+				commentBtn.type = "button";
+				commentBtn.textContent = `💬 ${comments.length}`;
+				commentBtn.title = "Comment";
+
+				actions.append(likeBtn, commentBtn);
 				main.appendChild(actions);
+
+				const commentWrap = document.createElement("div");
+				commentWrap.className = "comments";
+
+				for (const c of comments) {
+					const item = document.createElement("div");
+					item.className = "comment";
+					item.innerHTML = `<strong>${peerSuffix(c.from) || "user"}</strong>: ${escapeHtml(c.text)}`;
+					commentWrap.appendChild(item);
+				}
+
+				const form = document.createElement("div");
+				form.className = "comment-form";
+
+				const input = document.createElement("input");
+				input.placeholder = "Write a comment...";
+
+				const submit = document.createElement("button");
+				submit.type = "button";
+				submit.className = "secondary-btn";
+				submit.textContent = "Reply";
+
+				submit.onclick = async () => {
+					const body = input.value.trim();
+					if (!body) return;
+
+					const payload = {
+						postId: id,
+						from: state.peerId,
+						text: body,
+						ts: Date.now(),
+					};
+
+					input.value = "";
+					applyComment(payload);
+					await broadcastMeta("comment", payload);
+				};
+
+				input.addEventListener("keydown", (e) => {
+					if (e.key === "Enter") {
+						e.preventDefault();
+						submit.click();
+					}
+				});
+
+				form.append(input, submit);
+				commentWrap.appendChild(form);
+				main.appendChild(commentWrap);
 			}
 
 			card.append(avatar, main);
 			return card;
+		}
+
+		function escapeHtml(str) {
+			return String(str)
+				.replaceAll("&", "&amp;")
+				.replaceAll("<", "&lt;")
+				.replaceAll(">", "&gt;")
+				.replaceAll('"', "&quot;")
+				.replaceAll("'", "&#039;");
 		}
 
 		function postVisibleInActiveTab(post) {
@@ -1100,7 +1310,7 @@
 				if (!postVisibleInActiveTab(post)) continue;
 				els.feed.append(createPostCard(post));
 			}
-			els.feed.scrollTop = els.feed.scrollHeight;
+			els.feed.parentElement.scrollTop = els.feed.parentElement.scrollHeight;
 		}
 
 		function switchFeedTab(tab) {
@@ -1449,6 +1659,28 @@
 						);
 					} catch (authErr) {
 						console.warn("authoritative history apply skipped", authErr);
+					}
+				}
+				if (packet.kind === "reaction" && packet.topic === state.topic) {
+					const payload = await decryptPayload(packet.cipher);
+					applyReaction(payload);
+
+					if (state.isHost) {
+						for (const [peerId, c] of state.conns.entries()) {
+							if (peerId === conn.peer || peerId === state.peerId) continue;
+							if (c.open && c.metadata?.topic === state.topic) c.send(packet);
+						}
+					}
+				}
+				if (packet.kind === "comment" && packet.topic === state.topic) {
+					const payload = await decryptPayload(packet.cipher);
+					applyComment(payload);
+
+					if (state.isHost) {
+						for (const [peerId, c] of state.conns.entries()) {
+							if (peerId === conn.peer || peerId === state.peerId) continue;
+							if (c.open && c.metadata?.topic === state.topic) c.send(packet);
+						}
 					}
 				}
 			} catch (err) {
